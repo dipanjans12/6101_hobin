@@ -145,6 +145,7 @@ public class Scheduler {
       WorkerNode n = null;
 
       synchronized(workers) {
+        // Hobin: new doesn't need to be synchronized
         n = new WorkerNode(workers.size(), addr, port);
         workers.add(n);
       }
@@ -153,6 +154,7 @@ public class Scheduler {
       return n;
     }
 
+    // Hobin: get a free worker node
     WorkerNode getFreeWorkerNode() {
       WorkerNode n = null;
 
@@ -171,6 +173,7 @@ public class Scheduler {
       return n;
     }
 
+    // Hobin: put a free worker node
     void addFreeWorkerNode(WorkerNode n) {
       n.status = 1;
       synchronized(freeWorkers) {
