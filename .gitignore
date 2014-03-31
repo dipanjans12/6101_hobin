@@ -2,3 +2,5 @@ client.jar
 jobs.jar
 scheduler.jar
 worker.jar
+fs/.*.jar
+fs/example/out*.txt
