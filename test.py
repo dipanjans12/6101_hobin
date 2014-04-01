@@ -29,10 +29,16 @@ def KillJavaProcess(name):
     return
 
   if out != None and len(out) > 0:
-    pid = out.split()[0]
-    #sys.stdout.write("Killing [%s] " % pid)
+    lines = out.split("\n")
+    pids = []
+    for l in lines:
+      t = l.split()
+      if len(t) == 2:
+        pids.append(t[0])
+
+    #sys.stdout.write("Killing [%s] " % pids)
     #sys.stdout.flush()
-    cmd = "kill %s" % pid
+    cmd = "kill %s" % (" ".join(pids))
     #print cmd
     subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
 
@@ -49,7 +55,9 @@ def KillJavaProcess(name):
 
 
 def KillSchedWorker():
-  print "Killing scheduler and worker ..."
+  sys.stdout.write("Killing scheduler and worker ... ")
+  sys.stdout.flush()
+  bt = time.time()
   jobs = []
   jobs.append(multiprocessing.Process(target=KillJavaProcess, args=("scheduler.jar",)))
   jobs.append(multiprocessing.Process(target=KillJavaProcess, args=("worker.jar",)))
@@ -57,6 +65,8 @@ def KillSchedWorker():
     j.start()
   for j in jobs:
     j.join()
+  et = time.time()
+  print " %.3f sec" % (et - bt)
   print ""
 
 
@@ -77,21 +87,25 @@ def RunSubp(cmd, q):
 
 
 _sched = None
-_worker = None
+_workers = []
 _sched_q = multiprocessing.Queue()
-_worker_q = multiprocessing.Queue()
+_worker_qs = []
 
 
-def RunSchedWorker():
-  global _sched, _worker
+def RunSchedWorker(num_w):
+  global _sched, _workers
   print "Running scheduler ..."
   _sched = multiprocessing.Process(target=RunSubpSafe, args=("java -jar scheduler.jar 51000", _sched_q,))
   _sched.start()
   time.sleep(0.5)
-  print "Running worker ..."
-  _worker = multiprocessing.Process(target=RunSubpSafe, args=("java -jar worker.jar localhost 51000 51001", _worker_q,))
-  #_worker = multiprocessing.Process(target=RunWorker, args=(_worker_q,))
-  _worker.start()
+  print "Running %d worker(s) ..." % num_w
+  for i in range(num_w):
+    q = multiprocessing.Queue()
+    _worker_qs.append(q)
+    _workers.append(multiprocessing.Process(target=RunSubpSafe,
+      args=("java -jar worker.jar localhost 51000 %d" % (51001 + i), q,)))
+  for j in _workers:
+    j.start()
   time.sleep(0.5)
   print ""
 
@@ -102,11 +116,13 @@ def KillJoinSchedWorker():
   print "scheduler"
   print Indent(_sched_q.get(), 2)
 
-  print "worker"
-  print Indent(_worker_q.get(), 2)
+  for i in range(len(_worker_qs)):
+    print "worker %d" % i
+    print Indent(_worker_qs[i].get(), 2)
 
   _sched.join()
-  _worker.join()
+  for w in _workers:
+    w.join()
 
 
 def RunJobs():
@@ -149,7 +165,7 @@ def TestRunHello(runs):
 def main(argv):
   KillSchedWorker()
 
-  RunSchedWorker()
+  RunSchedWorker(2)
 
   #RunJobs()
   TestRunHello(2)
