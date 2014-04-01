@@ -71,6 +71,11 @@ def RunSubpSafe(cmd, q):
     pass
 
 
+def RunSubp(cmd, q):
+  out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
+  q.put(out)
+
+
 _sched = None
 _worker = None
 _sched_q = multiprocessing.Queue()
@@ -119,11 +124,23 @@ def RunJobs():
 def TestRunHello(runs):
   sys.stdout.write("Running Hello %d times ... " % runs)
   sys.stdout.flush()
-  bt = time.time()
-  out = ""
+  jobs = []
+  qs = []
   for i in range(runs):
-    out += subprocess.check_output("java -jar client.jar localhost 51000 jobs.jar jobs.Hello",
-        stderr=subprocess.STDOUT, shell=True)
+    q = multiprocessing.Queue()
+    qs.append(q)
+    jobs.append(multiprocessing.Process(target=RunSubp, args=("java -jar client.jar localhost 51000 jobs.jar jobs.Hello", q,)))
+
+  bt = time.time()
+  for j in jobs:
+    j.start()
+
+  out = ""
+  for q in qs:
+    out += q.get()
+  for j in jobs:
+    j.join()
+
   et = time.time()
   print "%f sec" % (et - bt)
   print Indent(out, 2)
