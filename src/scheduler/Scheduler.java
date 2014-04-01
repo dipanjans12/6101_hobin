@@ -4,37 +4,23 @@ import java.io.*;
 import java.net.*;
 import java.util.ArrayList;
 import java.util.LinkedList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import common.*;
 
 public class Scheduler {
 
-  int schedulerPort;
-  Cluster cluster;
-  int jobIdNext;
+  private class ProcessReq implements Runnable {
+    Socket _s;
 
-  Scheduler(int p) {
-    schedulerPort = p;
-    cluster = new Cluster();
-    jobIdNext = 1;
-  }
+    ProcessReq(Socket s) {
+      _s = s;
+    }
 
-  public static void main(String[] args) {
-    Scheduler scheduler = new Scheduler(Integer.parseInt(args[0]));
-    scheduler.run();
-  }
-
-  public void run() {
-    try{
-      //create a ServerSocket listening at specified port
-      ServerSocket serverSocket = new ServerSocket(schedulerPort);
-
-      while(true){
-        //accept connection from worker or client
-        Socket socket = serverSocket.accept();
-        DataInputStream dis = new DataInputStream(socket.getInputStream());
-        DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
-
+    public void run() {
+      try {
+        DataInputStream dis = new DataInputStream(_s.getInputStream());
+        DataOutputStream dos = new DataOutputStream(_s.getOutputStream());
         int code = dis.readInt();
 
         //a connection from worker reporting itself
@@ -50,15 +36,14 @@ public class Scheduler {
             System.out.println("Worker "+n.id+" "+n.addr+" "+n.port+" created");
           }
           dos.flush();
-        }
+        } else if (code == Opcode.new_job) {
+          //a connection from client submitting a job
 
-        //a connection from client submitting a job
-        if(code == Opcode.new_job){
           String className = dis.readUTF();
           long len = dis.readLong();
 
           //send out the jobId
-          int jobId = jobIdNext++;
+          int jobId = jobIdNext.getAndIncrement();
           dos.writeInt(jobId);
           dos.flush();
 
@@ -84,7 +69,7 @@ public class Scheduler {
 
           //get a free worker
           WorkerNode n = cluster.getFreeWorkerNode();
-          
+
           //notify the client
           dos.writeInt(Opcode.job_start);
           dos.flush();
@@ -93,7 +78,7 @@ public class Scheduler {
           Socket workerSocket = new Socket(n.addr, n.port);
           DataInputStream wis = new DataInputStream(workerSocket.getInputStream());
           DataOutputStream wos = new DataOutputStream(workerSocket.getOutputStream());
-          
+
           wos.writeInt(Opcode.new_tasks);
           wos.writeInt(jobId);
           wos.writeUTF(className);
@@ -121,7 +106,38 @@ public class Scheduler {
 
         dis.close();
         dos.close();
-        socket.close();
+        _s.close();
+      } catch (Exception e) {
+        e.printStackTrace();
+      }
+    }
+  }
+
+  int schedulerPort;
+  Cluster cluster;
+  AtomicInteger jobIdNext = new AtomicInteger();
+
+  Scheduler(int p) {
+    schedulerPort = p;
+    cluster = new Cluster();
+    jobIdNext.getAndIncrement();
+  }
+
+  public static void main(String[] args) {
+    Scheduler scheduler = new Scheduler(Integer.parseInt(args[0]));
+    scheduler.run();
+  }
+
+  public void run() {
+    try{
+      //create a ServerSocket listening at specified port
+      ServerSocket serverSocket = new ServerSocket(schedulerPort);
+
+      while(true){
+        //accept connection from worker or client
+        Socket socket = serverSocket.accept();
+        Thread t = new Thread(new ProcessReq(socket));
+        t.start();
       }
     } catch(Exception e) {
       e.printStackTrace();
@@ -145,7 +161,6 @@ public class Scheduler {
       WorkerNode n = null;
 
       synchronized(workers) {
-        // Hobin: new doesn't need to be synchronized
         n = new WorkerNode(workers.size(), addr, port);
         workers.add(n);
       }
