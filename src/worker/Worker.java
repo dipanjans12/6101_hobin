@@ -72,8 +72,6 @@ public class Worker {
         String fileName = new String("fs/."+jobId+".jar");
         String className = dis.readUTF();
         int taskIdStart = dis.readInt();
-        // Hobin: scheduler provides this, which, for now, is assigned from
-        // each job. They may be intended to be separate.
         int numTasks = dis.readInt();
 
         //read the job file from shared file system
