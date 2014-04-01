@@ -5,6 +5,7 @@ import java.net.*;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import common.*;
@@ -12,69 +13,6 @@ import common.*;
 public class Scheduler {
 
   private class ProcessWorkerregNewjob implements Runnable {
-    private class ProcessTasks implements Runnable {
-      int jobId;
-      int taskIdStart;
-      String className;
-      DataInputStream dis;
-      DataOutputStream dos;
-
-      ProcessTasks(
-          int jobId,
-          int taskIdStart,
-          String className,
-          DataInputStream dis,
-          DataOutputStream dos) {
-        this.jobId = jobId;
-        this.taskIdStart = taskIdStart;
-        this.className = className;
-        this.dis = dis;
-        this.dos = dos;
-      }
-
-      public void run() {
-        try {
-          final int numTasksPerWorker = 1;
-
-          //get a free worker
-          WorkerNode n = cluster.getFreeWorkerNode();
-
-          //notify the client
-          if (taskIdStart == 0) {
-            dos.writeInt(Opcode.job_start);
-            dos.flush();
-          }
-
-          //assign the tasks to the worker
-          Socket workerSocket = new Socket(n.addr, n.port);
-          DataInputStream wis = new DataInputStream(workerSocket.getInputStream());
-          DataOutputStream wos = new DataOutputStream(workerSocket.getOutputStream());
-
-          wos.writeInt(Opcode.new_tasks);
-          wos.writeInt(jobId);
-          wos.writeUTF(className);
-          wos.writeInt(taskIdStart);
-          wos.writeInt(numTasksPerWorker);
-          wos.flush();
-
-          //repeatedly process the worker's feedback
-          while(wis.readInt() == Opcode.task_finish) {
-            dos.writeInt(Opcode.job_print);
-            dos.writeUTF("task "+wis.readInt()+" finished on worker "+n.id);
-            dos.flush();
-          }
-
-          //disconnect and free the worker
-          wis.close();
-          wos.close();
-          workerSocket.close();
-          cluster.addFreeWorkerNode(n);
-        } catch (Exception e) {
-          e.printStackTrace();
-        }
-      }
-    }
-
     Socket _s;
 
     ProcessWorkerregNewjob(Socket s) {
@@ -130,8 +68,9 @@ public class Scheduler {
           int numTasks = JobFactory.getJob(fileName, className).getNumTasks();
 
           List<Thread> ths = new ArrayList<Thread>();
+          AtomicBoolean task_start_notified = new AtomicBoolean();
           for (int taskIdStart = 0; taskIdStart < numTasks; taskIdStart ++) {
-            Thread t = new Thread(new ProcessTasks(jobId, taskIdStart, className, dis, dos));
+            Thread t = new Thread(new ProcessTasks(jobId, taskIdStart, className, dis, dos, task_start_notified));
             ths.add(t);
             t.start();
           }
@@ -150,6 +89,78 @@ public class Scheduler {
         e.printStackTrace();
       }
     }
+
+    private class ProcessTasks implements Runnable {
+      int jobId;
+      int taskIdStart;
+      String className;
+      DataInputStream dis;
+      DataOutputStream dos;
+      AtomicBoolean task_start_notified;
+
+      ProcessTasks(
+          int jobId,
+          int taskIdStart,
+          String className,
+          DataInputStream dis,
+          DataOutputStream dos,
+          AtomicBoolean task_start_notified) {
+        this.jobId = jobId;
+        this.taskIdStart = taskIdStart;
+        this.className = className;
+        this.dis = dis;
+        this.dos = dos;
+        this.task_start_notified = task_start_notified;
+      }
+
+      public void run() {
+        try {
+          final int numTasksPerWorker = 1;
+
+          //get a free worker
+          WorkerNode n = cluster.getFreeWorkerNode();
+
+          boolean ts_notified = task_start_notified.getAndSet(true);
+          if (! ts_notified) {
+            //notify the client
+            synchronized(dos) {
+              dos.writeInt(Opcode.job_start);
+              dos.flush();
+            }
+          }
+
+          //assign the tasks to the worker
+          Socket workerSocket = new Socket(n.addr, n.port);
+          DataInputStream wis = new DataInputStream(workerSocket.getInputStream());
+          DataOutputStream wos = new DataOutputStream(workerSocket.getOutputStream());
+
+          wos.writeInt(Opcode.new_tasks);
+          wos.writeInt(jobId);
+          wos.writeUTF(className);
+          wos.writeInt(taskIdStart);
+          wos.writeInt(numTasksPerWorker);
+          wos.flush();
+
+          //repeatedly process the worker's feedback
+          while(wis.readInt() == Opcode.task_finish) {
+            synchronized(dos) {
+              dos.writeInt(Opcode.job_print);
+              dos.writeUTF("task "+wis.readInt()+" finished on worker "+n.id);
+              dos.flush();
+            }
+          }
+
+          //disconnect and free the worker
+          wis.close();
+          wos.close();
+          workerSocket.close();
+          cluster.addFreeWorkerNode(n);
+        } catch (Exception e) {
+          e.printStackTrace();
+        }
+      }
+    }
+
   }
 
   int schedulerPort;
