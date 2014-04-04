@@ -14,8 +14,8 @@ public class Hello_4_100 extends Job {
 
   @Override
   public void task(int tId) {
-    System.out.println(_sdf.format(System.currentTimeMillis()) +
-        " task"+tId+": Hello_4_1000"); //this string will be printed out from worker instead of client
+    //System.out.println(_sdf.format(System.currentTimeMillis()) +
+    //    " task"+tId+": Hello_4_1000"); //this string will be printed out from worker instead of client
     try{
       Thread.sleep(100);
     } catch(Exception e) {
