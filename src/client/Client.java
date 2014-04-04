@@ -2,10 +2,13 @@ package client;
 
 import java.io.*;
 import java.net.*;
+import java.text.SimpleDateFormat;
 
 import common.*;
 
 public class Client {
+  static private SimpleDateFormat _sdf = new SimpleDateFormat("HH:mm:ss.SSS");
+
   public static void main(String[] args) throws Exception {
 
     String schedulerAddr = args[0];
@@ -16,6 +19,7 @@ public class Client {
     long time0, time1, time2, time3;
     time0 = time1 = time2 = time3 = 0;
     time0 = System.nanoTime()/1000000;
+    long t0 = System.currentTimeMillis();
 
     //connect with scheduler
     Socket socket = new Socket( schedulerAddr, schedulerPort);
@@ -60,7 +64,8 @@ public class Client {
       if(code == Opcode.job_finish) {
         time3 = System.nanoTime()/1000000;
         System.out.println("job finished");
-        System.out.println("jobId="+jobId+" arrivalTime="+time0+" waitTime="+(time2-time1)+" execTime="+(time3-time2));
+        //System.out.println("jobId="+jobId+" arrivalTime="+time0+" waitTime="+(time2-time1)+" execTime="+(time3-time2));
+        System.out.println("jobId="+jobId + " arrivalTime="+ _sdf.format(t0) + " waitTime="+(time2-time1)+" execTime="+(time3-time2));
         break;
       }
 

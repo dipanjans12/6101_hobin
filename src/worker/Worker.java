@@ -2,6 +2,7 @@ package worker;
 
 import java.io.*;
 import java.net.*;
+import java.text.SimpleDateFormat;
 
 import common.*;
 
@@ -11,6 +12,7 @@ public class Worker {
   int schedulerPort;
   String workerAddr;
   int workerPort;
+  static final SimpleDateFormat _sdf = new SimpleDateFormat("HH:mm:ss.SSS");
 
   public static void main(String[] args) {
     Worker worker = new Worker( args[0], Integer.parseInt(args[1]), Integer.parseInt(args[2]));
@@ -81,6 +83,8 @@ public class Worker {
         for(int taskId=taskIdStart; taskId<taskIdStart+numTasks; taskId++){
           job.task(taskId);
           //report to scheduler once a task is finished
+          System.out.printf("%s workerId=%d jobId=%d taskId=%d\n",
+              _sdf.format(System.currentTimeMillis()), workerId, jobId, taskId);
           dos.writeInt(Opcode.task_finish);
           dos.writeInt(taskId);
           dos.flush();

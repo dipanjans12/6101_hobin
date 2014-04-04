@@ -2,6 +2,7 @@ package scheduler;
 
 import java.io.*;
 import java.net.*;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
@@ -11,6 +12,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import common.*;
 
 public class Scheduler {
+
+  static final SimpleDateFormat _sdf = new SimpleDateFormat("HH:mm:ss.SSS");
 
   private class ProcessWorkerregNewjob implements Runnable {
     Socket _s;
@@ -145,7 +148,8 @@ public class Scheduler {
           while(wis.readInt() == Opcode.task_finish) {
             synchronized(dos) {
               dos.writeInt(Opcode.job_print);
-              dos.writeUTF("task "+wis.readInt()+" finished on worker "+n.id);
+              //dos.writeUTF("task "+wis.readInt()+" finished on worker "+n.id);
+              dos.writeUTF(_sdf.format(System.currentTimeMillis()) + " task "+wis.readInt()+" finished on worker "+n.id);
               dos.flush();
             }
           }
