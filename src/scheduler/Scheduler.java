@@ -8,13 +8,12 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 import common.*;
 
 public class Scheduler {
-
-  static final SimpleDateFormat _sdf = new SimpleDateFormat("HH:mm:ss.SSS");
-
   private class ProcessWorkerregNewjob implements Runnable {
     Socket _s;
 
@@ -67,18 +66,9 @@ public class Scheduler {
           fos.flush();
           fos.close();
           
-          //get the tasks
           int numTasks = JobFactory.getJob(fileName, className).getNumTasks();
 
-          List<Thread> ths = new ArrayList<Thread>();
-          AtomicBoolean task_start_notified = new AtomicBoolean();
-          for (int taskIdStart = 0; taskIdStart < numTasks; taskIdStart ++) {
-            Thread t = new Thread(new ProcessTasks(jobId, taskIdStart, className, dis, dos, task_start_notified));
-            ths.add(t);
-            t.start();
-          }
-          for (Thread t: ths)
-            t.join();
+          _Scheduler.Run(jobId, numTasks, className, dis, dos);
 
           //notify the client
           dos.writeInt(Opcode.job_finish);
@@ -92,79 +82,6 @@ public class Scheduler {
         e.printStackTrace();
       }
     }
-
-    private class ProcessTasks implements Runnable {
-      int jobId;
-      int taskIdStart;
-      String className;
-      DataInputStream dis;
-      DataOutputStream dos;
-      AtomicBoolean task_start_notified;
-
-      ProcessTasks(
-          int jobId,
-          int taskIdStart,
-          String className,
-          DataInputStream dis,
-          DataOutputStream dos,
-          AtomicBoolean task_start_notified) {
-        this.jobId = jobId;
-        this.taskIdStart = taskIdStart;
-        this.className = className;
-        this.dis = dis;
-        this.dos = dos;
-        this.task_start_notified = task_start_notified;
-      }
-
-      public void run() {
-        try {
-          final int numTasksPerWorker = 1;
-
-          //get a free worker
-          WorkerNode n = cluster.getFreeWorkerNode();
-
-          boolean ts_notified = task_start_notified.getAndSet(true);
-          if (! ts_notified) {
-            //notify the client
-            synchronized(dos) {
-              dos.writeInt(Opcode.job_start);
-              dos.flush();
-            }
-          }
-
-          //assign the tasks to the worker
-          Socket workerSocket = new Socket(n.addr, n.port);
-          DataInputStream wis = new DataInputStream(workerSocket.getInputStream());
-          DataOutputStream wos = new DataOutputStream(workerSocket.getOutputStream());
-
-          wos.writeInt(Opcode.new_tasks);
-          wos.writeInt(jobId);
-          wos.writeUTF(className);
-          wos.writeInt(taskIdStart);
-          wos.writeInt(numTasksPerWorker);
-          wos.flush();
-
-          //repeatedly process the worker's feedback
-          while(wis.readInt() == Opcode.task_finish) {
-            synchronized(dos) {
-              dos.writeInt(Opcode.job_print);
-              //dos.writeUTF("task "+wis.readInt()+" finished on worker "+n.id);
-              dos.writeUTF(_sdf.format(System.currentTimeMillis()) + " task "+wis.readInt()+" finished on worker "+n.id);
-              dos.flush();
-            }
-          }
-
-          //disconnect and free the worker
-          wis.close();
-          wos.close();
-          workerSocket.close();
-          cluster.addFreeWorkerNode(n);
-        } catch (Exception e) {
-          e.printStackTrace();
-        }
-      }
-    }
-
   }
 
   int schedulerPort;
@@ -186,6 +103,8 @@ public class Scheduler {
     try{
       //create a ServerSocket listening at specified port
       ServerSocket serverSocket = new ServerSocket(schedulerPort);
+      Thread _sched = new Thread(new _Scheduler(cluster));
+      _sched.start();
 
       while(true){
         //accept connection from worker or client
@@ -199,73 +118,258 @@ public class Scheduler {
       
     //serverSocket.close();
   }
+}
+
+
+//the data structure for a cluster of worker nodes
+class Cluster {
+  // This is only for tracking worker node ids. Better change it so that the
+  // worker node ids are not reused.
+  ArrayList<WorkerNode> workers; //all the workers
+
+  LinkedList<WorkerNode> freeWorkers; //the free workers
   
+  Cluster() {
+    workers = new ArrayList<WorkerNode>();
+    freeWorkers = new LinkedList<WorkerNode>();
+  }
 
-  //the data structure for a cluster of worker nodes
-  class Cluster {
-    ArrayList<WorkerNode> workers; //all the workers
-    LinkedList<WorkerNode> freeWorkers; //the free workers
-    
-    Cluster() {
-      workers = new ArrayList<WorkerNode>();
-      freeWorkers = new LinkedList<WorkerNode>();
+  WorkerNode createWorkerNode(String addr, int port) {
+    WorkerNode n = null;
+
+    synchronized(workers) {
+      n = new WorkerNode(workers.size(), addr, port);
+      workers.add(n);
     }
+    addFreeWorkerNode(n);
 
-    WorkerNode createWorkerNode(String addr, int port) {
-      WorkerNode n = null;
+    return n;
+  }
 
-      synchronized(workers) {
-        n = new WorkerNode(workers.size(), addr, port);
-        workers.add(n);
-      }
-      addFreeWorkerNode(n);
+  // get a free worker node
+  WorkerNode getFreeWorkerNode() {
+    WorkerNode n = null;
 
-      return n;
-    }
-
-    // get a free worker node
-    WorkerNode getFreeWorkerNode() {
-      WorkerNode n = null;
-
-      try{
-        synchronized(freeWorkers) {
-          while(freeWorkers.size() == 0) {
-            freeWorkers.wait();
-          }
-          n = freeWorkers.remove();
+    try{
+      synchronized (freeWorkers) {
+        while (freeWorkers.size() == 0) {
+          freeWorkers.wait();
         }
-        n.status = 2;
-      } catch(Exception e) {
-        e.printStackTrace();
+        n = freeWorkers.remove();
       }
-
-      return n;
+      n.status = 2;
+    } catch(Exception e) {
+      e.printStackTrace();
     }
 
-    // put a free worker node
-    void addFreeWorkerNode(WorkerNode n) {
-      n.status = 1;
-      synchronized(freeWorkers) {
-        freeWorkers.add(n);
-        freeWorkers.notifyAll();
+    return n;
+  }
+
+  // put a free worker node
+  void addFreeWorkerNode(WorkerNode n) {
+    n.status = 1;
+    synchronized(freeWorkers) {
+      freeWorkers.add(n);
+      freeWorkers.notifyAll();
+    }
+  }
+}
+
+
+//the data structure of a worker node
+class WorkerNode {
+  int id;
+  String addr;
+  int port;
+  int status; //WorkerNode status: 0-sleep, 1-free, 2-busy, 4-failed
+
+  WorkerNode(int i, String a, int p) {
+    id = i;
+    addr = a;
+    port = p;
+    status = 0;
+  }
+}
+
+
+class _Scheduler implements Runnable {
+  private static BlockingQueue<Job> jobs = new LinkedBlockingQueue<Job>();
+  public static final SimpleDateFormat _sdf = new SimpleDateFormat("HH:mm:ss.SSS");
+
+  private Cluster cluster;
+
+  _Scheduler(Cluster cluster) {
+    this.cluster = cluster;
+  }
+
+  public void run() {
+    try {
+      while (true) {
+        //System.out.printf("_Scheduler:run: getFreeWorkerNode() ...\n");
+        // wait and get a free worker
+        WorkerNode w = cluster.getFreeWorkerNode();
+
+        while (true) {
+          // get the next job (with a fair share policy, RR first)
+          //System.out.printf("_Scheduler:run: jobs.take() ...\n");
+          Job j = jobs.take();
+          //System.out.printf("_Scheduler:run: job: %d %d %d\n", j.id, j.nextTask.get(), j.numTasks);
+          if (j.nextTask.get() != j.numTasks) {
+            jobs.put(j);
+            j.RunNextTask(w, cluster);
+            break;
+          }
+        }
       }
+    } catch (Exception e) {
+      e.printStackTrace();
     }
   }
 
-  //the data structure of a worker node
-  class WorkerNode {
-    int id;
-    String addr;
-    int port;
-    int status; //WorkerNode status: 0-sleep, 1-free, 2-busy, 4-failed
+  static public void Run(
+      int jobId,
+      int numTasks,
+      String className,
+      DataInputStream dis,
+      DataOutputStream dos) {
+    try {
+      //System.out.printf("_Scheduler.Run: %d %d %s\n", jobId, numTasks, className);
+      Job j = new Job(jobId, numTasks, className, dis, dos);
+      jobs.put(j);
 
-    WorkerNode(int i, String a, int p) {
-      id = i;
-      addr = a;
-      port = p;
-      status = 0;
+      // wait for all the tasks of the job to finish
+      while (j.num_remaining_tasks.get() != 0) {
+        synchronized (j.num_remaining_tasks) {
+          //System.out.printf("_Scheduler.Run: j.num_remaining_tasks.wait();\n");
+          j.num_remaining_tasks.wait();
+        }
+      }
+    } catch (Exception e) {
+      e.printStackTrace();
     }
   }
 
+  static class Job {
+    final int id;
+    final int numTasks;
+    final String className;
+    DataInputStream dis;
+    DataOutputStream dos;
+    AtomicInteger nextTask;
+    AtomicBoolean task_start_notified;
+    AtomicInteger num_remaining_tasks;
 
+    Job(int id,
+        int numTasks,
+        String className,
+        DataInputStream dis,
+        DataOutputStream dos) {
+      this.id = id;
+      this.numTasks = numTasks;
+      if (this.numTasks <= 0)
+        throw new RuntimeException(String.format("Unexpected numTasks %d", numTasks));
+      this.className = className;
+      this.nextTask = new AtomicInteger(0);
+      this.dis = dis;
+      this.dos = dos;
+
+      task_start_notified = new AtomicBoolean();
+      num_remaining_tasks = new AtomicInteger(numTasks);
+    }
+
+    // round-robin tasks within a job
+    void RunNextTask(WorkerNode w, Cluster cluster) {
+      class _RunTask implements Runnable {
+        WorkerNode w;
+        int job_id;
+        int task_id;
+        String className;
+        DataInputStream dis;
+        DataOutputStream dos;
+        Cluster cluster;
+        AtomicBoolean task_start_notified;
+        AtomicInteger num_remaining_tasks;
+
+        _RunTask(
+            WorkerNode w,
+            int job_id,
+            int task_id,
+            String className,
+            DataInputStream dis,
+            DataOutputStream dos,
+            Cluster cluster,
+            AtomicBoolean task_start_notified,
+            AtomicInteger num_remaining_tasks) {
+          this.w = w;
+          this.job_id = job_id;
+          this.task_id = task_id;
+          this.className = className;
+          this.dis = dis;
+          this.dos = dos;
+          this.cluster = cluster;
+          this.task_start_notified = task_start_notified;
+          this.num_remaining_tasks = num_remaining_tasks;
+            }
+
+        public void run() {
+          try {
+            final int numTasksPerWorker = 1;
+
+            boolean ts_notified = task_start_notified.getAndSet(true);
+            if (! ts_notified) {
+              //notify the client
+              synchronized(dos) {
+                dos.writeInt(Opcode.job_start);
+                dos.flush();
+              }
+            }
+
+            //assign the tasks to the worker
+            Socket workerSocket = new Socket(w.addr, w.port);
+            DataInputStream wis = new DataInputStream(workerSocket.getInputStream());
+            DataOutputStream wos = new DataOutputStream(workerSocket.getOutputStream());
+
+            wos.writeInt(Opcode.new_tasks);
+            wos.writeInt(job_id);
+            wos.writeUTF(className);
+            wos.writeInt(task_id);
+            wos.writeInt(numTasksPerWorker);
+            wos.flush();
+
+            //repeatedly process the worker's feedback
+            while(wis.readInt() == Opcode.task_finish) {
+              synchronized(dos) {
+                dos.writeInt(Opcode.job_print);
+                //dos.writeUTF("task "+wis.readInt()+" finished on worker "+w.id);
+                dos.writeUTF(_Scheduler._sdf.format(System.currentTimeMillis()) + " task "+wis.readInt()+" finished on worker "+w.id);
+                dos.flush();
+              }
+            }
+
+            //disconnect and free the worker
+            wis.close();
+            wos.close();
+            workerSocket.close();
+            cluster.addFreeWorkerNode(w);
+
+            // notify when all tasks of the job finish
+            int nrt = num_remaining_tasks.decrementAndGet();
+            if (nrt == 0) {
+              synchronized (num_remaining_tasks) {
+                num_remaining_tasks.notifyAll();
+              }
+            }
+          } catch (Exception e) {
+            e.printStackTrace();
+          }
+        }
+      }
+
+      int task_id = nextTask.getAndIncrement();
+      System.out.printf("%s w=%d j=%d t=%d\n",
+          _sdf.format(System.currentTimeMillis()), w.id, id, task_id);
+      Thread t = new Thread(new _RunTask(w, id, task_id, className, dis, dos, cluster, task_start_notified, num_remaining_tasks));
+      t.start();
+    }
+  }
 }
