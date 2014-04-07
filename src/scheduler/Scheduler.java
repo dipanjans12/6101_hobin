@@ -233,8 +233,9 @@ class _Scheduler implements Runnable {
       DataInputStream dis,
       DataOutputStream dos) {
     try {
-      //System.out.printf("_Scheduler.Run: %d %d %s\n", jobId, numTasks, className);
       Job j = new Job(jobId, numTasks, className, dis, dos);
+      System.out.printf("%s AddJob j=%d num_tasks=%d className=%s\n",
+          _sdf.format(System.currentTimeMillis()), jobId, numTasks, className);
       jobs.put(j);
 
       // wait for all the tasks of the job to finish
