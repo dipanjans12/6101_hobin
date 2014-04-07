@@ -4,11 +4,14 @@ import java.io.*;
 import java.net.*;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedList;
-import java.util.List;
+import java.util.Set;
+import java.util.Queue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 import common.*;
@@ -210,15 +213,13 @@ class _Scheduler implements Runnable {
         WorkerNode w = cluster.getFreeWorkerNode();
 
         while (true) {
-          // get the next job (with a fair share policy, RR first)
-          //System.out.printf("_Scheduler:run: jobs.take() ...\n");
+          // Round-robin next job. TODO: implement fair scheduling
           Job j = jobs.take();
-          //System.out.printf("_Scheduler:run: job: %d %d %d\n", j.id, j.nextTask.get(), j.numTasks);
-          if (j.nextTask.get() != j.numTasks) {
-            jobs.put(j);
-            j.RunNextTask(w, cluster);
+          if (j.Completed())
+            continue;
+          jobs.put(j);
+          if (j.RunNextTask(w, cluster))
             break;
-          }
         }
       }
     } catch (Exception e) {
@@ -237,14 +238,7 @@ class _Scheduler implements Runnable {
       System.out.printf("%s AddJob j=%d num_tasks=%d className=%s\n",
           _sdf.format(System.currentTimeMillis()), jobId, numTasks, className);
       jobs.put(j);
-
-      // wait for all the tasks of the job to finish
-      while (j.num_remaining_tasks.get() != 0) {
-        synchronized (j.num_remaining_tasks) {
-          //System.out.printf("_Scheduler.Run: j.num_remaining_tasks.wait();\n");
-          j.num_remaining_tasks.wait();
-        }
-      }
+      j.WaitForCompletion();
     } catch (Exception e) {
       e.printStackTrace();
     }
@@ -256,9 +250,9 @@ class _Scheduler implements Runnable {
     final String className;
     DataInputStream dis;
     DataOutputStream dos;
-    AtomicInteger nextTask;
+    Queue<Integer> tasks_to_run;
+    Set<Integer> tasks_completed;
     AtomicBoolean task_start_notified;
-    AtomicInteger num_remaining_tasks;
 
     Job(int id,
         int numTasks,
@@ -270,16 +264,38 @@ class _Scheduler implements Runnable {
       if (this.numTasks <= 0)
         throw new RuntimeException(String.format("Unexpected numTasks %d", numTasks));
       this.className = className;
-      this.nextTask = new AtomicInteger(0);
+
+      tasks_to_run = new ConcurrentLinkedQueue<Integer>();
+      for (int i = 0; i < numTasks; i ++)
+        tasks_to_run.add(i);
+
+      tasks_completed = new HashSet<Integer>();
+
       this.dis = dis;
       this.dos = dos;
 
       task_start_notified = new AtomicBoolean();
-      num_remaining_tasks = new AtomicInteger(numTasks);
+    }
+
+    boolean Completed() {
+      int tc = 0;
+      synchronized (tasks_completed) {
+        tc = tasks_completed.size();
+      }
+      return (tc == numTasks);
+    }
+
+    void WaitForCompletion()
+      throws InterruptedException {
+      // wait for all the tasks of the job to finish
+      //System.out.printf("_Scheduler: tasks_completed.wait();\n");
+      synchronized (tasks_completed) {
+        tasks_completed.wait();
+      }
     }
 
     // round-robin tasks within a job
-    void RunNextTask(WorkerNode w, Cluster cluster) {
+    boolean RunNextTask(WorkerNode w, Cluster cluster) {
       class _RunTask implements Runnable {
         WorkerNode w;
         int job_id;
@@ -289,7 +305,6 @@ class _Scheduler implements Runnable {
         DataOutputStream dos;
         Cluster cluster;
         AtomicBoolean task_start_notified;
-        AtomicInteger num_remaining_tasks;
 
         _RunTask(
             WorkerNode w,
@@ -299,8 +314,7 @@ class _Scheduler implements Runnable {
             DataInputStream dis,
             DataOutputStream dos,
             Cluster cluster,
-            AtomicBoolean task_start_notified,
-            AtomicInteger num_remaining_tasks) {
+            AtomicBoolean task_start_notified) {
           this.w = w;
           this.job_id = job_id;
           this.task_id = task_id;
@@ -309,75 +323,133 @@ class _Scheduler implements Runnable {
           this.dos = dos;
           this.cluster = cluster;
           this.task_start_notified = task_start_notified;
-          this.num_remaining_tasks = num_remaining_tasks;
-            }
+        }
 
         public void run() {
           try {
-            final int numTasksPerWorker = 1;
+            {
+              final int numTasksPerWorker = 1;
 
-            boolean ts_notified = task_start_notified.getAndSet(true);
-            if (! ts_notified) {
-              //notify the client
-              synchronized(dos) {
-                dos.writeInt(Opcode.job_start);
-                dos.flush();
-              }
-            }
-
-            //assign the tasks to the worker
-            Socket workerSocket = new Socket(w.addr, w.port);
-            DataInputStream wis = new DataInputStream(workerSocket.getInputStream());
-            DataOutputStream wos = new DataOutputStream(workerSocket.getOutputStream());
-
-            wos.writeInt(Opcode.new_tasks);
-            wos.writeInt(job_id);
-            wos.writeUTF(className);
-            wos.writeInt(task_id);
-            wos.writeInt(numTasksPerWorker);
-            wos.flush();
-
-            //repeatedly process the worker's feedback
-            while (true) {
-              int w_op = wis.readInt();
-              if (w_op == Opcode.task_finish) {
+              boolean ts_notified = task_start_notified.getAndSet(true);
+              if (! ts_notified) {
+                //notify the client
                 synchronized(dos) {
-                  dos.writeInt(Opcode.job_print);
-                  //dos.writeUTF("task "+wis.readInt()+" finished on worker "+w.id);
-                  dos.writeUTF(_Scheduler._sdf.format(System.currentTimeMillis()) + " task "+wis.readInt()+" finished on worker "+w.id);
+                  dos.writeInt(Opcode.job_start);
                   dos.flush();
                 }
-              } else if (w_op == Opcode.worker_finish) {
-                break;
-              } else {
-                throw new RuntimeException(String.format("Unexpected worker opcode %d", w_op));
               }
+
+              //assign the tasks to the worker
+              Socket workerSocket = new Socket(w.addr, w.port);
+              DataInputStream wis = new DataInputStream(workerSocket.getInputStream());
+              DataOutputStream wos = new DataOutputStream(workerSocket.getOutputStream());
+
+              wos.writeInt(Opcode.new_tasks);
+              wos.writeInt(job_id);
+              wos.writeUTF(className);
+              wos.writeInt(task_id);
+              wos.writeInt(numTasksPerWorker);
+              wos.flush();
+
+              //WatchDog wd = new WatchDog();
+              //Thread t_wd = new Thread(wd);
+              //t_wd.start();
+
+              //repeatedly process the worker's feedback
+              while (true) {
+                int w_op = wis.readInt();
+                if (w_op == Opcode.task_finish) {
+                  synchronized(dos) {
+                    dos.writeInt(Opcode.job_print);
+                    //dos.writeUTF("task "+wis.readInt()+" finished on worker "+w.id);
+                    dos.writeUTF(_Scheduler._sdf.format(System.currentTimeMillis()) + " task "+wis.readInt()+" finished on worker "+w.id);
+                    dos.flush();
+                  }
+                } else if (w_op == Opcode.worker_finish) {
+                  break;
+                } else if (w_op == Opcode.worker_heartbeat) {
+                  //wd.Reset();
+                  System.out.printf("%s heartbeat from worker %d\n", _sdf.format(System.currentTimeMillis()), w.id);
+                } else {
+                  throw new RuntimeException(String.format("Unexpected worker opcode %d", w_op));
+                }
+              }
+
+              //wd.RequestStop();
+              //t_wd.interrupt();
+              //t_wd.join();
+
+              //disconnect and free the worker
+              wis.close();
+              wos.close();
+              workerSocket.close();
+              cluster.addFreeWorkerNode(w);
             }
 
-            //disconnect and free the worker
-            wis.close();
-            wos.close();
-            workerSocket.close();
-            cluster.addFreeWorkerNode(w);
+            synchronized (tasks_completed) {
+              tasks_completed.add(task_id);
 
-            // notify when all tasks of the job finish
-            int nrt = num_remaining_tasks.decrementAndGet();
-            if (nrt == 0) {
-              synchronized (num_remaining_tasks) {
-                num_remaining_tasks.notifyAll();
-              }
+              // notify when all tasks of the job finish
+              if (tasks_completed.size() == numTasks)
+                tasks_completed.notifyAll();
             }
+          } catch (EOFException e) {
+            // handle worker failure. put back the task.
+            System.out.printf("%s worker failure\n", _sdf.format(System.currentTimeMillis()));
+            tasks_to_run.add(task_id);
           } catch (Exception e) {
             e.printStackTrace();
           }
         }
       }
 
-      int task_id = nextTask.getAndIncrement();
+      Integer task_id = tasks_to_run.poll();
+      if (task_id == null)
+        return false;
+
       System.out.printf("%s w=%d j=%d t=%d\n",
           _sdf.format(System.currentTimeMillis()), w.id, id, task_id);
-      Thread t = new Thread(new _RunTask(w, id, task_id, className, dis, dos, cluster, task_start_notified, num_remaining_tasks));
+      Thread t = new Thread(new _RunTask(w, id, task_id, className, dis, dos, cluster, task_start_notified));
       t.start();
+      return true;
     }
   }
 }
+
+
+//class WatchDog implements Runnable {
+//  long last_heartbeat;
+//  boolean stop_requested = false;
+//
+//  WatchDog() {
+//    last_heartbeat = System.currentTimeMillis();
+//  }
+//
+//  public void run() {
+//    try {
+//      while (! stop_requested) {
+//        Thread.sleep(1000);
+//        synchronized (this) {
+//          if (System.currentTimeMillis() - last_heartbeat >= 1000) {
+//            System.out.printf("Timer expired!!! Do something!!\n");
+//            //throw new RuntimeException("Timer expired!!! Do something!!");
+//          }
+//        }
+//      }
+//    } catch (InterruptedException e) {
+//      if (stop_requested)
+//        return;
+//      e.printStackTrace();
+//    }
+//  }
+//
+//  public void Reset() {
+//    synchronized (this) {
+//      last_heartbeat = System.currentTimeMillis();
+//    }
+//  }
+//
+//  public void RequestStop() {
+//    stop_requested = true;
+//  }
+//}

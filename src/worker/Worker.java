@@ -79,16 +79,27 @@ public class Worker {
         //read the job file from shared file system
         Job job = JobFactory.getJob(fileName, className);
 
+        // heartbeat
+        // _Heartbeat hb = new _Heartbeat(dos);
+        // Thread hbt = new Thread(hb);
+        // hbt.start();
+
         //execute the assigned tasks
         for(int taskId=taskIdStart; taskId<taskIdStart+numTasks; taskId++){
           job.task(taskId);
           //report to scheduler once a task is finished
           System.out.printf("%s jobId=%d taskId=%d\n",
               _sdf.format(System.currentTimeMillis()), jobId, taskId);
-          dos.writeInt(Opcode.task_finish);
-          dos.writeInt(taskId);
-          dos.flush();
+          //synchronized (dos) {
+            dos.writeInt(Opcode.task_finish);
+            dos.writeInt(taskId);
+            dos.flush();
+          //}
         }
+
+        // hb.RequestStop();
+        // hbt.interrupt();
+        // hbt.join();
 
         //disconnect
         dos.writeInt(Opcode.worker_finish);
@@ -102,4 +113,35 @@ public class Worker {
     }
   }
 
+  //class _Heartbeat implements Runnable {
+  //  DataOutputStream dos;
+  //  boolean stop_requested = false;
+  //
+  //  _Heartbeat(DataOutputStream dos) {
+  //    this.dos = dos;
+  //  }
+  //
+  //  public void run() {
+  //    try {
+  //      while (! stop_requested) {
+  //        synchronized (dos) {
+  //          dos.writeInt(Opcode.worker_heartbeat);
+  //          dos.flush();
+  //        }
+  //        Thread.sleep(500);
+  //      }
+  //    } catch (InterruptedException e) {
+  //      //System.out.printf("%s _Heartbeat interrupted()\n", _sdf.format(System.currentTimeMillis()));
+  //      if (stop_requested)
+  //        return;
+  //      e.printStackTrace();
+  //    } catch (Exception e) {
+  //      e.printStackTrace();
+  //    }
+  //  }
+  //
+  //  public void RequestStop() {
+  //    stop_requested = true;
+  //  }
+  //}
 }
