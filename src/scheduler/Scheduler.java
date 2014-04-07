@@ -338,12 +338,19 @@ class _Scheduler implements Runnable {
             wos.flush();
 
             //repeatedly process the worker's feedback
-            while(wis.readInt() == Opcode.task_finish) {
-              synchronized(dos) {
-                dos.writeInt(Opcode.job_print);
-                //dos.writeUTF("task "+wis.readInt()+" finished on worker "+w.id);
-                dos.writeUTF(_Scheduler._sdf.format(System.currentTimeMillis()) + " task "+wis.readInt()+" finished on worker "+w.id);
-                dos.flush();
+            while (true) {
+              int w_op = wis.readInt();
+              if (w_op == Opcode.task_finish) {
+                synchronized(dos) {
+                  dos.writeInt(Opcode.job_print);
+                  //dos.writeUTF("task "+wis.readInt()+" finished on worker "+w.id);
+                  dos.writeUTF(_Scheduler._sdf.format(System.currentTimeMillis()) + " task "+wis.readInt()+" finished on worker "+w.id);
+                  dos.flush();
+                }
+              } else if (w_op == Opcode.worker_finish) {
+                break;
+              } else {
+                throw new RuntimeException(String.format("Unexpected worker opcode %d", w_op));
               }
             }
 
