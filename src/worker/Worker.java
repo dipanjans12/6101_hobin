@@ -83,8 +83,8 @@ public class Worker {
         for(int taskId=taskIdStart; taskId<taskIdStart+numTasks; taskId++){
           job.task(taskId);
           //report to scheduler once a task is finished
-          System.out.printf("%s workerId=%d jobId=%d taskId=%d\n",
-              _sdf.format(System.currentTimeMillis()), workerId, jobId, taskId);
+          System.out.printf("%s jobId=%d taskId=%d\n",
+              _sdf.format(System.currentTimeMillis()), jobId, taskId);
           dos.writeInt(Opcode.task_finish);
           dos.writeInt(taskId);
           dos.flush();
