@@ -333,6 +333,9 @@ class _Scheduler implements Runnable {
             {
               final int numTasksPerWorker = 1;
 
+              System.out.printf("%s task_start: w=%d j=%d t=%d\n",
+                  _sdf.format(System.currentTimeMillis()), w.id, id, task_id);
+
               boolean ts_notified = task_start_notified.getAndSet(true);
               if (! ts_notified) {
                 //notify the client
@@ -354,10 +357,6 @@ class _Scheduler implements Runnable {
               wos.writeInt(numTasksPerWorker);
               wos.flush();
 
-              //WatchDog wd = new WatchDog();
-              //Thread t_wd = new Thread(wd);
-              //t_wd.start();
-
               //repeatedly process the worker's feedback
               while (true) {
                 int w_op = wis.readInt();
@@ -378,15 +377,14 @@ class _Scheduler implements Runnable {
                 }
               }
 
-              //wd.RequestStop();
-              //t_wd.interrupt();
-              //t_wd.join();
-
               //disconnect and free the worker
               wis.close();
               wos.close();
               workerSocket.close();
               cluster.addFreeWorkerNode(w);
+
+              System.out.printf("%s task_end: w=%d j=%d t=%d\n",
+                  _sdf.format(System.currentTimeMillis()), w.id, id, task_id);
             }
 
             synchronized (tasks_completed) {
@@ -398,7 +396,8 @@ class _Scheduler implements Runnable {
             }
           } catch (EOFException e) {
             // handle worker failure. put back the task.
-            System.out.printf("%s worker %d failed\n", _sdf.format(System.currentTimeMillis()), w.id);
+            System.out.printf("%s task_fail: w=%d j=%d t=%d\n",
+                _sdf.format(System.currentTimeMillis()), w.id, id, task_id);
             tasks_to_run.add(task_id);
           } catch (Exception e) {
             e.printStackTrace();
@@ -410,49 +409,9 @@ class _Scheduler implements Runnable {
       if (task_id == null)
         return false;
 
-      System.out.printf("%s w=%d j=%d t=%d\n",
-          _sdf.format(System.currentTimeMillis()), w.id, id, task_id);
       Thread t = new Thread(new _RunTask(w, id, task_id, className, dis, dos, cluster, task_start_notified));
       t.start();
       return true;
     }
   }
 }
-
-
-//class WatchDog implements Runnable {
-//  long last_heartbeat;
-//  boolean stop_requested = false;
-//
-//  WatchDog() {
-//    last_heartbeat = System.currentTimeMillis();
-//  }
-//
-//  public void run() {
-//    try {
-//      while (! stop_requested) {
-//        Thread.sleep(1000);
-//        synchronized (this) {
-//          if (System.currentTimeMillis() - last_heartbeat >= 1000) {
-//            System.out.printf("Timer expired!!! Do something!!\n");
-//            //throw new RuntimeException("Timer expired!!! Do something!!");
-//          }
-//        }
-//      }
-//    } catch (InterruptedException e) {
-//      if (stop_requested)
-//        return;
-//      e.printStackTrace();
-//    }
-//  }
-//
-//  public void Reset() {
-//    synchronized (this) {
-//      last_heartbeat = System.currentTimeMillis();
-//    }
-//  }
-//
-//  public void RequestStop() {
-//    stop_requested = true;
-//  }
-//}
