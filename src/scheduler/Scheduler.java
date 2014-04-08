@@ -42,7 +42,7 @@ public class Scheduler {
           else{
             dos.writeInt(Opcode.success);
             dos.writeInt(n.id);
-            System.out.printf("%s worker %d at %s:%d started\n",
+            System.out.printf("%s worker_start: w=%d %s:%d\n",
                 _sdf.format(System.currentTimeMillis()), n.id, n.addr, n.port);
           }
           dos.flush();
@@ -238,7 +238,7 @@ class _Scheduler implements Runnable {
       DataOutputStream dos) {
     try {
       Job j = new Job(jobId, numTasks, className, dis, dos);
-      System.out.printf("%s AddJob j=%d num_tasks=%d className=%s\n",
+      System.out.printf("%s job_add: j=%d num_tasks=%d className=%s\n",
           _sdf.format(System.currentTimeMillis()), jobId, numTasks, className);
       jobs.put(j);
       j.WaitForCompletion();
@@ -383,7 +383,7 @@ class _Scheduler implements Runnable {
               workerSocket.close();
               cluster.addFreeWorkerNode(w);
 
-              System.out.printf("%s task_end: w=%d j=%d t=%d\n",
+              System.out.printf("%s task_finish: w=%d j=%d t=%d\n",
                   _sdf.format(System.currentTimeMillis()), w.id, id, task_id);
             }
 
