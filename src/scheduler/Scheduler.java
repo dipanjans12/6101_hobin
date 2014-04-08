@@ -17,6 +17,8 @@ import java.util.concurrent.LinkedBlockingQueue;
 import common.*;
 
 public class Scheduler {
+  public static final SimpleDateFormat _sdf = new SimpleDateFormat("HH:mm:ss.SSS");
+
   private class ProcessWorkerregNewjob implements Runnable {
     Socket _s;
 
@@ -40,7 +42,8 @@ public class Scheduler {
           else{
             dos.writeInt(Opcode.success);
             dos.writeInt(n.id);
-            System.out.println("Worker "+n.id+" "+n.addr+" "+n.port+" created");
+            System.out.printf("%s worker %d at %s:%d started\n",
+                _sdf.format(System.currentTimeMillis()), n.id, n.addr, n.port);
           }
           dos.flush();
         } else if (code == Opcode.new_job) {
@@ -395,7 +398,7 @@ class _Scheduler implements Runnable {
             }
           } catch (EOFException e) {
             // handle worker failure. put back the task.
-            System.out.printf("%s worker failure\n", _sdf.format(System.currentTimeMillis()));
+            System.out.printf("%s worker %d failed\n", _sdf.format(System.currentTimeMillis()), w.id);
             tasks_to_run.add(task_id);
           } catch (Exception e) {
             e.printStackTrace();
