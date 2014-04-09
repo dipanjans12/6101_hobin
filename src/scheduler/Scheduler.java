@@ -6,6 +6,7 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.Set;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -13,12 +14,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.Collections;
 
 import common.*;
 
 public class Scheduler {
   public static final SimpleDateFormat _sdf = new SimpleDateFormat("HH:mm:ss.SSS");
-
+  
   private class ProcessWorkerregNewjob implements Runnable {
     Socket _s;
 
@@ -56,7 +58,7 @@ public class Scheduler {
           int jobId = jobIdNext.getAndIncrement();
           dos.writeInt(jobId);
           dos.flush();
-
+          
           //receive the job file and store it to the shared filesystem
           String fileName = new String("fs/."+jobId+".jar");
           FileOutputStream fos = new FileOutputStream(fileName);
@@ -199,7 +201,11 @@ class WorkerNode {
 
 
 class _Scheduler implements Runnable {
-  private static BlockingQueue<Job> jobs = new LinkedBlockingQueue<Job>();
+  //private static BlockingQueue<Job> jobs = new LinkedBlockingQueue<Job>();
+  private static List<Job> jobs = new ArrayList<Job>();
+  private static List<Long> timeTakenByJobs = new ArrayList<Long>();
+  private static List<Long> syncList = new ArrayList<Long>();
+  
   public static final SimpleDateFormat _sdf = new SimpleDateFormat("HH:mm:ss.SSS");
 
   private Cluster cluster;
@@ -217,12 +223,35 @@ class _Scheduler implements Runnable {
 
         while (true) {
           // Round-robin next job. TODO: implement fair scheduling
-          Job j = jobs.take();
-          if (j.Completed())
-            continue;
-          jobs.put(j);
-          if (j.RunNextTask(w, cluster))
-            break;
+        	
+          // Fair share scheduler
+          int minIndex;
+          Job j;
+          
+          if(!jobs.isEmpty() && !timeTakenByJobs.isEmpty()){
+        	  synchronized(timeTakenByJobs){
+        	  minIndex = findMinimum(timeTakenByJobs);
+        	  }
+        	  //System.out.println("minIndex:" + minIndex + "minvalue:" + timeTakenByJobs.get(minIndex));
+        	  if(timeTakenByJobs.get(minIndex) == Long.MAX_VALUE){
+        		 
+        		 /* System.out.println("Inside max_value minIndex:" + minIndex);
+        		  for(int i = 0; i < timeTakenByJobs.size(); i++) 
+        	            System.out.println(timeTakenByJobs.get(i));*/
+        	           
+        		  continue;
+        	  }
+        	  j = jobs.get(minIndex);
+        	  if (j.Completed()){
+        		  //System.out.println("Completed Job minIndex:" + minIndex);
+        		  timeTakenByJobs.set(minIndex, Long.MAX_VALUE);
+        		  continue;
+        	  }
+              //jobs.put(j);
+              if (j.RunNextTask(w, cluster))
+                  break;
+          }
+          //Job j = jobs.take();
         }
       }
     } catch (Exception e) {
@@ -230,6 +259,17 @@ class _Scheduler implements Runnable {
     }
   }
 
+  public int findMinimum(List<Long> list){
+	  int minIndex = 0; 
+	  Long min = list.get(0);
+	  for(int i = 0; i < list.size(); i++) 
+         if(list.get(i) < min){
+        	 min = list.get(i);
+        	 minIndex = i;
+         }
+	  return minIndex;
+  }
+  
   static public void Run(
       int jobId,
       int numTasks,
@@ -240,8 +280,14 @@ class _Scheduler implements Runnable {
       Job j = new Job(jobId, numTasks, className, dis, dos);
       System.out.printf("%s job_add: j=%d num_tasks=%d className=%s\n",
           _sdf.format(System.currentTimeMillis()), jobId, numTasks, className);
-      jobs.put(j);
+     
+      //jobs.put(j);	  
+      jobs.add(j);
+      timeTakenByJobs.add(0l);
+      syncList.add(0l);
+      
       j.WaitForCompletion();
+      
     } catch (Exception e) {
       e.printStackTrace();
     }
@@ -357,6 +403,9 @@ class _Scheduler implements Runnable {
               wos.writeInt(numTasksPerWorker);
               wos.flush();
 
+              // start time of the task
+              long startTime = System.nanoTime();
+              
               //repeatedly process the worker's feedback
               while (true) {
                 int w_op = wis.readInt();
@@ -376,7 +425,15 @@ class _Scheduler implements Runnable {
                   throw new RuntimeException(String.format("Unexpected worker opcode %d", w_op));
                 }
               }
-
+              
+              //end time
+              long timeTaken = System.nanoTime() - startTime;
+              
+              System.out.println("Updating time slot for job_id:" + job_id);
+              // update the time taken by the job
+              synchronized(syncList.get(job_id - 1)){
+			  timeTakenByJobs.set(job_id - 1, timeTakenByJobs.get(job_id - 1) + timeTaken);
+              }
               //disconnect and free the worker
               wis.close();
               wos.close();
@@ -391,8 +448,12 @@ class _Scheduler implements Runnable {
               tasks_completed.add(task_id);
 
               // notify when all tasks of the job finish
-              if (tasks_completed.size() == numTasks)
-                tasks_completed.notifyAll();
+              if (tasks_completed.size() == numTasks){
+            	  System.out.println("Writing large value to time slot of job_id:" + job_id);
+                  // Write a large no. in the time slot for the job
+                  timeTakenByJobs.set(job_id - 1, Long.MAX_VALUE);
+            	  tasks_completed.notifyAll();
+              }
             }
           } catch (EOFException e) {
             // handle worker failure. put back the task.
